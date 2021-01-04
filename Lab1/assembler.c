@@ -1,0 +1,1157 @@
+#include <stdio.h> /* standard input/output library */
+#include <stdlib.h> /* Standard C Library */
+#include <string.h> /* String operations library */
+#include <ctype.h> /* Library for useful character operations */
+#include <limits.h> /* Library for definitions of common variable type characteristics */
+
+
+#define MAX_LINE_LENGTH 255
+
+FILE* infile = NULL;
+FILE* outfile = NULL;
+int startAddress; //Addres specified by .ORIG
+int numlines = 0; //Number of lines in the program
+int PC = 0;
+char symbolTable[255][20];
+int symbolTableAdds[255];
+int numLabels = 0;
+
+enum{ 
+    DONE, OK, EMPTY_LINE
+};
+
+
+int openFiles(char* inFile, char* outFile){
+    infile = fopen(inFile, "r");
+    outfile = fopen(outFile, "w");
+
+    if (!infile) {
+        printf("Error: Cannot open file %s\n", inFile);
+        exit(4);
+    }
+    if (!outfile) {
+        printf("Error: Cannot open file %s\n", outFile);
+        exit(4);
+    }
+    return 1;
+}
+
+int outputToFile(int *binArray){
+  //Convert to int
+  int bin = 0;
+  int mult = 1;
+
+  for(int i = 0; i < 16; i++){
+    bin += binArray[i] * mult;
+    mult = mult * 2;
+  }
+  fprintf( outfile, "0x%.4X\n", bin);   
+  printf("0x%.4X\n", bin);  
+}
+
+int closeFiles(){
+        fclose(infile);
+        fclose(outfile);
+}
+
+int toNum( char * pStr ){
+    char * t_ptr;
+    char * orig_pStr;
+    int t_length,k;
+    int lNum, lNeg = 0;
+    long int lNumLong;
+
+    orig_pStr = pStr;
+    if( *pStr == '#' )                                /* decimal */
+    {
+        pStr++;
+        if( *pStr == '-' )                                /* dec is negative */
+        {
+            lNeg = 1;
+            pStr++;
+        }
+        t_ptr = pStr;
+        t_length = strlen(t_ptr);
+        for(k=0;k < t_length;k++)
+        {
+            if (!isdigit(*t_ptr))
+            {
+                printf("Error: invalid decimal operand, %s\n",orig_pStr);
+                exit(4);
+            }
+            t_ptr++;
+        }
+        lNum = atoi(pStr);
+        if (lNeg)
+            lNum = -lNum;
+
+        return lNum;
+    }
+    else if( *pStr == 'x' ){        /* hex     */
+        pStr++;
+        if( *pStr == '-' ){                           /* hex is negative */
+            lNeg = 1;
+            pStr++;
+        }
+        t_ptr = pStr;
+        t_length = strlen(t_ptr);
+        for(k=0;k < t_length;k++){
+            if (!isxdigit(*t_ptr)){
+                printf("Error: invalid hex operand, %s\n",orig_pStr);
+                exit(4);
+            }
+            t_ptr++;
+        }
+        lNumLong = strtol(pStr, NULL, 16);    /* convert hex string into integer */
+        lNum = (lNumLong > INT_MAX)? INT_MAX : lNumLong;
+        if( lNeg )
+            lNum = -lNum;
+        return lNum;
+    }
+    else{
+        printf( "Error: invalid operand, %s\n", orig_pStr);
+        exit(4);  /* This has been changed from error code 3 to error code 4, see clarification 12 */
+    }
+}
+
+int isOpcode(char* lPtr){
+  if(strcmp(lPtr,"add") == 0) return 1;
+  if(strcmp(lPtr,"and") == 0) return 1;
+  if(strcmp(lPtr,"br") == 0) return 1;
+  if(strcmp(lPtr,"brn") == 0) return 1;
+  if(strcmp(lPtr,"brp") == 0) return 1;
+  if(strcmp(lPtr,"brnp") == 0) return 1;
+  if(strcmp(lPtr,"brz") == 0) return 1;
+  if(strcmp(lPtr,"brnz") == 0) return 1;
+  if(strcmp(lPtr,"brzp") == 0) return 1;
+  if(strcmp(lPtr,"brnzp") == 0) return 1;
+  if(strcmp(lPtr,"halt") == 0) return 1;
+  if(strcmp(lPtr,"jmp") == 0) return 1;
+  if(strcmp(lPtr,"jsr") == 0) return 1;
+  if(strcmp(lPtr,"jsrr") == 0) return 1;
+  if(strcmp(lPtr,"ldb") == 0) return 1;
+  if(strcmp(lPtr,"ldw") == 0) return 1;
+  if(strcmp(lPtr,"lea") == 0) return 1;
+  if(strcmp(lPtr,"nop") == 0) return 1;
+  if(strcmp(lPtr,"not") == 0) return 1;
+  if(strcmp(lPtr,"ret") == 0) return 1;
+  if(strcmp(lPtr,"lshf") == 0) return 1;
+  if(strcmp(lPtr,"rshfl") == 0) return 1;
+  if(strcmp(lPtr,"rshfa") == 0) return 1;
+  if(strcmp(lPtr,"rti") == 0) return 1;
+  if(strcmp(lPtr,"stb") == 0) return 1;
+  if(strcmp(lPtr,"stw") == 0) return 1;
+  if(strcmp(lPtr,"trap") == 0) return 1;
+  if(strcmp(lPtr,"xor") == 0) return 1;
+  
+  return -1;
+}
+
+int labelIsValid(char* label, char* opcode){
+  int i = 0;
+  //Check first char is letter and not 'x'
+  if(!isalpha(label[0]) || label[0] == 'x'){
+    exit(4);
+  }
+  if(!strcmp(opcode, "")) exit(2);
+  //Check every character is alphanum
+  while(label[i] != '\0'){
+    if(!isalnum(label[i])){
+      exit(4);
+    }
+    i++;
+  }
+  //Check label is no longer than 20
+  if(i > 20) exit(4);
+  //Check it is not an opcode or pseudo-op
+  if(isOpcode(label) == 1) exit(4);
+  if(!(strcmp(label,"in") && strcmp(label,"out") && strcmp(label,"getc") && strcmp(label,"puts"))) exit(4);
+  //Check label is not repeated
+  for(int i = 0; i < numLabels; i++){
+    if(!strcmp(label, symbolTable[i])){
+      exit(4);
+    }
+  }
+  return 1;
+}
+
+
+int readAndParse( FILE * pInfile, char * pLine, char ** pLabel, char** pOpcode, char ** pArg1, char ** pArg2, char ** pArg3, char ** pArg4){
+           char * lRet, * lPtr;
+           int i;
+           if( !fgets( pLine, MAX_LINE_LENGTH, pInfile)){
+                return( DONE );
+           }
+           for( i = 0; i < strlen( pLine ); i++ ){
+                pLine[i] = tolower( pLine[i] );
+           }
+          
+          /* convert entire line to lowercase */
+          *pLabel = *pOpcode = *pArg1 = *pArg2 = *pArg3 = *pArg4 = pLine + strlen(pLine);
+
+           /* ignore the comments */
+          lPtr = pLine;
+
+          while( *lPtr != ';' && *lPtr != '\0' && *lPtr != '\n' ){
+                lPtr++;
+          }
+
+           *lPtr = '\0';
+           if( !(lPtr = strtok( pLine, "\t\n ," ) ) )
+                return( EMPTY_LINE );
+
+           if( isOpcode( lPtr ) == -1 && lPtr[0] != '.' ) /* found a label */
+           {
+                *pLabel = lPtr;
+                if( !( lPtr = strtok( NULL, "\t\n ," ) ) ) return( OK );
+           }
+          *pOpcode = lPtr;
+
+           if( !( lPtr = strtok( NULL, "\t\n ," ) ) ) return( OK );
+          
+          *pArg1 = lPtr;
+          
+          if( !( lPtr = strtok( NULL, "\t\n ," ) ) ) return( OK );
+
+           *pArg2 = lPtr;
+           if( !( lPtr = strtok( NULL, "\t\n ," ) ) ) return( OK );
+
+           *pArg3 = lPtr;
+
+           if( !( lPtr = strtok( NULL, "\t\n ," ) ) ) return( OK );
+
+           *pArg4 = lPtr;
+
+           return( OK );
+}
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+int isReg(char* Arg){
+    if(!strcmp(Arg,"r0")){
+      return 1;
+    }
+    if(!strcmp(Arg,"r1")){
+      return 1;
+    }
+    if(!strcmp(Arg,"r2")){
+      return 1;
+    }
+    if(!strcmp(Arg,"r3")){
+      return 1;
+    }
+    if(!strcmp(Arg,"r4")){
+      return 1;
+    }
+    if(!strcmp(Arg,"r5")){
+      return 1;
+    }
+    if(!strcmp(Arg,"r6")){
+      return 1;
+    }
+    if(!strcmp(Arg,"r7")){
+      return 1;
+    }
+
+    return 0;
+}
+
+int getLabel(char* label){
+
+  for(int i = 0; i < numLabels; i++){
+    if(!strcmp(label, symbolTable[i])){
+      return symbolTableAdds[i];
+    }
+  }
+
+  exit(1); //Invalid label
+}
+
+
+/*
+    Input: type 
+    0 if PCoffset9, 1 if PCoffset11, 2 if boffset6 or offset6
+    //bin[0] is lsb
+*/
+int validateOffset(char* str, int type, int* bin){
+  //TO DO return binary offset
+  int labelAdd = 0;
+  int isPos = 1;
+
+  //String to int
+  int offset;
+  int num;
+
+
+  //PCoffset9 (BR) and PCoffset11 (JSR)
+  if(type == 0 || type == 1){
+    if(str[0] == '#' || str[0] == 'x'){
+      exit(4);
+    }
+    labelAdd = getLabel(str);
+    offset = (labelAdd - PC)/2;
+    num = offset;
+  }
+
+    int numBits = 8;
+    int range = 256;
+    if(type == 1){
+      numBits = 10;
+      range = 1024;
+    }
+    else if(type == 2){
+      offset = toNum(str);
+      num = offset;
+      numBits = 5;
+      range = 32;
+    }
+    
+    if((offset >= -range) && (offset <= (range -1) )){
+      if(num < 0){
+        isPos = 0;
+        num = num * (-1);
+      }
+
+      //Get positive binary number into array
+      int index = numBits-1;
+      for(int i = (range/2); i > 1; i = i/2){
+        if(num / i == 1){
+          bin[index] = 1;
+          num = num - i;
+        }
+        index--;
+      }
+
+      if(num == 1){
+        bin[0] = 1;
+      }
+
+      //Get 2's complement
+      if(!isPos){
+
+        //Flip all bits
+        for(int i = numBits; i >= 0; i--){
+          bin[i] = !bin[i];
+        }
+        //Increas by 1
+        int Cin = 1;
+        for(int i = 0; i < numBits; i++){
+          int temp = bin[i] + Cin;
+          if(temp == 2){
+            bin[i] = 0;
+            Cin = 1;
+          }
+          else if(temp == 1){
+            bin[i] = 1;
+            Cin = 0;
+          }
+          else{
+            bin[i] = 0;
+            Cin = 0;
+          }
+        }
+      }
+
+      //Print binary
+      return 1;
+    }
+    else{
+      exit(4);
+    }
+}
+
+//bin[3] is msb
+int validateAmmount(char* str, int* bin){
+  //String to int
+  int ammount = toNum(str);
+  if(ammount < 0) exit(4);
+
+  if((ammount >= 0) && (ammount <= 15 )){
+      if(ammount / 8 == 1){
+        bin[3] = 1;
+        ammount = ammount - 8;
+      }
+      if(ammount / 4 == 1){
+        bin[2] = 1;
+        ammount = ammount - 4;
+      }
+      if(ammount / 2 == 1){
+        bin[1] = 1;
+        ammount = ammount - 2;
+      }
+      if(ammount == 1){
+        bin[0] = 1;
+      }
+
+      return 1;
+    }
+    else{
+      exit(4);
+    }
+}
+
+//bin[7] is msb
+int validateTrap(char* str, int* bin){
+
+  //String to int
+  int trap = toNum(str);
+  if(trap < 0) exit(3);
+  if(str[0] != 'x') exit(3);
+
+  if((trap >= 0) && (trap <= 255 )){
+      if(trap / 128 == 1){
+        bin[7] = 1;
+        trap = trap - 128;
+      }
+      if(trap / 64 == 1){
+        bin[6] = 1;
+        trap = trap - 64;
+      }
+      if(trap / 32 == 1){
+        bin[5] = 1;
+        trap = trap - 32;
+      }
+      if(trap / 16 == 1){
+        bin[4] = 1;
+        trap = trap - 16;
+      }
+      if(trap / 8 == 1){
+        bin[3] = 1;
+        trap = trap - 8;
+      }
+      if(trap / 4 == 1){
+        bin[2] = 1;
+        trap = trap - 4;
+      }
+      if(trap / 2 == 1){
+        bin[1] = 1;
+        trap = trap - 2;
+      }
+      if(trap == 1){
+        bin[0] = 1;
+      }
+
+      return 1;
+    }
+    else{
+      exit(4);
+    }
+}
+
+//reg[2] is msb
+int validateReg(char* Arg, int* reg){
+
+    if(!strcmp(Arg,"r0")){
+      reg[2] = 0; reg[1] = 0; reg[0] = 0;
+      return 1;
+    }
+    if(!strcmp(Arg,"r1")){
+      reg[2] = 0; reg[1] = 0; reg[0] = 1;
+      return 1;
+    }
+    if(!strcmp(Arg,"r2")){
+      reg[2] = 0; reg[1] = 1; reg[0] = 0;
+      return 1;
+    }
+    if(!strcmp(Arg,"r3")){
+      reg[2] = 0; reg[1] = 1; reg[0] = 1;
+      return 1;
+    }
+    if(!strcmp(Arg,"r4")){
+      reg[2] = 1; reg[1] = 0; reg[0] = 0;
+      return 1;
+    }
+    if(!strcmp(Arg,"r5")){
+      reg[2] = 1; reg[1] = 0; reg[0] = 1;
+      return 1;
+    }
+    if(!strcmp(Arg,"r6")){
+      reg[2] = 1; reg[1] = 1; reg[0] = 0;
+      return 1;
+    }
+    if(!strcmp(Arg,"r7")){
+      reg[2] = 1; reg[1] = 1; reg[0] = 1;
+      return 1;
+    }
+
+    exit(4);  // Invalid register. Should be classified as Error Code 4
+}
+
+//bin[4] is msb
+int validateImmediate(char* Arg, int* bin){
+
+  int num = toNum(Arg);
+  int isPos = 1;
+
+  if((num >= -16) && (num <= 15 )){
+
+    if(num < 0){
+      num = num * (-1);
+      isPos = 0;
+    }
+
+      if(num < 0){
+        isPos = 0;
+        num = num * (-1);
+      }
+
+      if(num / 16 == 1){
+        bin[4] = 1;
+        num = num - 16;
+      }
+      if(num / 8 == 1){
+        bin[3] = 1;
+        num = num - 8;
+      }
+      if(num / 4 == 1){
+        bin[2] = 1;
+        num = num - 4;
+      }
+      if(num / 2 == 1){
+        bin[1] = 1;
+        num = num - 2;
+      }
+      if(num == 1){
+        bin[0] = 1;
+      }
+
+      //Get 2's complement id its negative
+      if(!isPos){
+
+        //Flip all bits
+        for(int i = 0; i < 5; i++){
+          bin[i] = !bin[i];
+        }
+        //Increas by 1
+        int Cin = 1;
+        for(int i = 0; i < 5; i++){
+          int temp = bin[i] + Cin;
+          if(temp == 2){
+            bin[i] = 0;
+            Cin = 1;
+          }
+          else if(temp == 1){
+            bin[i] = 1;
+            Cin = 0;
+          }
+          else{
+            bin[i] = 0;
+            Cin = 0;
+          }
+        }
+      }
+      return 1;
+    }
+    else{
+      exit(3);
+    }  // Invalid Immediate. Should be classified as Error Code 3
+}
+
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
+int checkAdd_And(char * pLabel, char* pOpcode, char * pArg1, char * pArg2, char * pArg3, char * pArg4){
+  int bin[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+
+  //Write opCode
+  if(!strcmp(pOpcode,"add")){
+    bin[15] = 0; bin[14] = 0; bin[13] = 0; bin[12] = 1;
+  }
+  else if(!strcmp(pOpcode,"and")){
+    bin[15] = 0; bin[14] = 1; bin[13] = 0; bin[12] = 1;
+  }
+  //Check arg1 is reg
+  int dr[3];
+  validateReg(pArg1,dr);
+  bin[11] = dr[2]; bin[10] = dr[1]; bin[9] = dr[0];
+  //Check arg2 is reg
+  int sr1[3];
+  validateReg(pArg2,sr1);
+  bin[8] = sr1[2]; bin[7] = sr1[1]; bin[6] = sr1[0];
+
+  //If arg3 is reg
+  if(isReg(pArg3)){
+    int sr2[3];
+    validateReg(pArg3,sr2);
+    bin[5] = 0; bin[4] = 0; bin[3] = 0;
+    bin[2] = sr2[2]; bin[1] = sr2[1]; bin[0] = sr2[0];
+  }  else{ //If arg3 is imm5
+    int imm5[] = {0,0,0,0,0};
+    validateImmediate(pArg3,imm5);
+    bin[5] = 1; 
+    bin[4] = imm5[4]; bin[3] = imm5[3]; bin[2] = imm5[2]; bin[1] = imm5[1]; bin[0] = imm5[0];
+  }
+
+
+
+  outputToFile(bin);
+  return 1;
+}
+
+int checkBr(char * pLabel, char* pOpcode, char * pArg1, char * pArg2, char * pArg3, char * pArg4){
+  int bin[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+  //Check other arguments are empty
+
+  if(strcmp(pArg2,"") || strcmp(pArg3,"") || strcmp(pArg4,"")){
+    exit(4);
+  }
+
+  //Set NZP bits
+  if(!strcmp(pOpcode,"br") || !strcmp(pOpcode,"brnzp")){
+    bin[11] = 1; bin[10] = 1; bin[9] = 1;
+  }
+  else if(!strcmp(pOpcode,"brn")){
+    bin[11] = 1; bin[10] = 0; bin[9] = 0;
+  }
+  else if(!strcmp(pOpcode,"brp")){
+    bin[11] = 0; bin[10] = 0; bin[9] = 1;
+  }
+  else if(!strcmp(pOpcode,"brnp")){
+    bin[11] = 1; bin[10] = 0; bin[9] = 1;
+  }
+  else if(!strcmp(pOpcode,"brz")){
+    bin[11] = 0; bin[10] = 1; bin[9] = 0;
+  }
+  else if(!strcmp(pOpcode,"brnz")){
+    bin[11] = 1; bin[10] = 1; bin[9] = 0;
+  }
+  else if(!strcmp(pOpcode,"brzp")){
+    bin[11] = 0; bin[10] = 1; bin[9] = 1;
+  }
+
+  //Get offset and set bits
+  int offset[] = {0,0,0,0,0,0,0,0,0};
+  validateOffset(pArg1,0,offset);
+  for(int i = 0; i < 9; i++){
+    bin[i] = offset[i];
+  }
+  outputToFile(bin);
+
+  return 0;
+}
+
+int checkHalt(char * pLabel, char* pOpcode, char * pArg1, char * pArg2, char * pArg3, char * pArg4){
+  //Check all arguments are empty
+  if(strcmp(pArg1,"") || strcmp(pArg2,"") || strcmp(pArg3,"") || strcmp(pArg4,"")){
+    exit(4);
+  }
+
+  int bin[] = {1,0,1,0,0,1,0,0,0,0,0,0,1,1,1,1};
+  outputToFile(bin);
+  return 0;
+}
+
+int checkJsr(char * pLabel, char* pOpcode, char * pArg1, char * pArg2, char * pArg3, char * pArg4){
+  int bin[] = {0,0,0,0,0,0,0,0,0,0,0,1,0,0,1,0};
+  int offset[11] = {0,0,0,0,0,0,0,0,0,0,0};
+  validateOffset(pArg1,1,offset);
+  
+
+  for(int i = 0; i < 11; i++){
+    bin[i] = offset[i];
+  }
+
+  //Check other arguments are empty
+  if(strcmp(pArg2,"") || strcmp(pArg3,"") || strcmp(pArg4,"")){
+    exit(4);
+  }
+  outputToFile(bin);
+  return 0;
+}
+
+int checkJmpandJsrr(char * pLabel, char* pOpcode, char * pArg1, char * pArg2, char * pArg3, char * pArg4){
+  int bin[] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0};
+  //Fill opcode
+  if(!strcmp(pOpcode,"jmp")){
+    bin[15] = 1;
+  }
+  //Get base register
+  int baseR[3];
+  validateReg(pArg1,baseR);
+  bin[8] = baseR[2]; bin[7] = baseR[1]; bin[6] = baseR[0]; 
+  //Check other registers are empty
+  if(strcmp(pArg2,"") || strcmp(pArg3,"") || strcmp(pArg4,"")){
+    exit(4);
+  }
+  outputToFile(bin);
+  return 0;
+}
+
+
+
+
+int checkLS(char* lLabel, char* lOpcode, char* lArg1, char* lArg2, char* lArg3, char* lArg4) {
+    int Opcode[4];
+    int SRorDS[3];
+    int BaseR[3];
+    int Offset[] = {0,0,0,0,0,0};
+    int LeaOffset[] = {0,0,0,0,0,0,0,0,0};
+    int Bin_instruction[16];
+
+    if(!strcmp(lOpcode,"ldb")) {
+      Opcode[3] = 0; Opcode[2] = 0; Opcode[1] = 1; Opcode[0] = 0;
+    } 
+    else if(!strcmp(lOpcode,"ldw")) {
+      Opcode[3] = 0; Opcode[2] = 1; Opcode[1] = 1; Opcode[0] = 0;
+    }
+    else if(!strcmp(lOpcode,"lea")) {
+      Opcode[3] = 1; Opcode[2] = 1; Opcode[1] = 1; Opcode[0] = 0;
+    }
+    else if(!strcmp(lOpcode,"stb")) {
+      Opcode[3] = 0; Opcode[2] = 0; Opcode[1] = 1; Opcode[0] = 1;
+    }
+    else if(!strcmp(lOpcode,"stw")) {
+      Opcode[3] = 0; Opcode[2] = 1; Opcode[1] = 1; Opcode[0] = 1;
+    }
+
+    if(strcmp(lOpcode,"lea")){
+        validateReg(lArg1,SRorDS);                                                // Verifies the length of the DR/SR and stores the binary in the address of SRorDS
+        validateReg(lArg2,BaseR);                                                 // Verifies the length of the BaseR and stores the binary in the address of BaseR
+        validateOffset(lArg3,2,Offset);                                     // Verifies the length of the Offsets and stores the binary in the address Offset
+        if(strcmp(lArg4, "") != 0) exit(4);                                         // Verifies that an extra register hasn't been inputted
+
+        Bin_instruction[15] = Opcode[3];
+        Bin_instruction[14] = Opcode[2];
+        Bin_instruction[13] = Opcode[1];
+        Bin_instruction[12] = Opcode[0];
+        Bin_instruction[11] = SRorDS[2];
+        Bin_instruction[10] = SRorDS[1];
+        Bin_instruction[9] = SRorDS[0];
+        Bin_instruction[8] = BaseR[2];
+        Bin_instruction[7] = BaseR[1];
+        Bin_instruction[6] = BaseR[0];
+        Bin_instruction[5] = Offset[5];
+        Bin_instruction[4] = Offset[4];
+        Bin_instruction[3] = Offset[3];
+        Bin_instruction[2] = Offset[2];
+        Bin_instruction[1] = Offset[1];
+        Bin_instruction[0] = Offset[0];
+        }             // Convert ISA to binary
+    else {
+
+        validateReg(lArg1,SRorDS);                                                // Verifies the length of the DR/SR and stores the binary in the address of SRorDS
+        validateOffset(lArg2,0,LeaOffset);                                     // Verifies the length of the Offsets and stores the binary in the address Offset
+        if(strcmp(lArg3, "") != 0 || strcmp(lArg4, "") != 0) exit(4);                    // Verifies that an extra register hasn't been inputted
+
+        Bin_instruction[15] = Opcode[3];
+        Bin_instruction[14] = Opcode[2];
+        Bin_instruction[13] = Opcode[1];
+        Bin_instruction[12] = Opcode[0];
+        Bin_instruction[11] = SRorDS[2];
+        Bin_instruction[10] = SRorDS[1];
+        Bin_instruction[9] = SRorDS[0];
+        Bin_instruction[8] = LeaOffset[8];
+        Bin_instruction[7] = LeaOffset[7];
+        Bin_instruction[6] = LeaOffset[6];
+        Bin_instruction[5] = LeaOffset[5];
+        Bin_instruction[4] = LeaOffset[4];
+        Bin_instruction[3] = LeaOffset[3];
+        Bin_instruction[2] = LeaOffset[2];
+        Bin_instruction[1] = LeaOffset[1];
+        Bin_instruction[0] = LeaOffset[0];
+        }
+
+    outputToFile(Bin_instruction);
+        return 1;
+}
+
+int checkNOPandRTI(char* lLabel, char* lOpcode, char* lArg1, char* lArg2, char* lArg3, char* lArg4){
+    int Bin_instruction[16];
+
+    if((!strcmp(lArg1,"") && !strcmp(lArg2,"") && !strcmp(lArg3,"") && !strcmp(lArg4,"")) == 0) exit(4);
+
+    if(!strcmp(lOpcode,"nop")) {
+        Bin_instruction[15] = 0;
+    }
+    else {
+        Bin_instruction[15] = 1;
+    }
+    Bin_instruction[14] = 0;
+    Bin_instruction[13] = 0;
+    Bin_instruction[12] = 0;
+    Bin_instruction[11] = 0;
+    Bin_instruction[10] = 0;
+    Bin_instruction[9] = 0;
+    Bin_instruction[8] = 0;
+    Bin_instruction[7] = 0;
+    Bin_instruction[6] = 0;
+    Bin_instruction[5] = 0;
+    Bin_instruction[4] = 0;
+    Bin_instruction[3] = 0;
+    Bin_instruction[2] = 0;
+    Bin_instruction[1] = 0;
+    Bin_instruction[0] = 0;
+
+    for(int loop = 15; loop>=0; loop--){
+        printf("%d",Bin_instruction[loop]);
+    }
+    outputToFile(Bin_instruction);
+    printf("\n");
+    return 1;
+}
+
+int checkNOT(char* lLabel, char* lOpcode, char* lArg1, char* lArg2, char* lArg3, char* lArg4){
+    int DR[3];
+    int SR[3];
+    int Bin_instruction[16];
+
+    validateReg(lArg1,DR);
+    validateReg(lArg2,SR);
+    if(strcmp(lArg3,"") != 0 || strcmp(lArg4,"") != 0) exit(4);
+
+    Bin_instruction[15] = 1;
+    Bin_instruction[14] = 0;
+    Bin_instruction[13] = 0;
+    Bin_instruction[12] = 1;
+    Bin_instruction[11] = DR[2];
+    Bin_instruction[10] = DR[1];
+    Bin_instruction[9] = DR[0];
+    Bin_instruction[8] = SR[2];
+    Bin_instruction[7] = SR[1];
+    Bin_instruction[6] = SR[0];
+    Bin_instruction[5] = 1;
+    Bin_instruction[4] = 1;
+    Bin_instruction[3] = 1;
+    Bin_instruction[2] = 1;
+    Bin_instruction[1] = 1;
+    Bin_instruction[0] = 1;
+
+    for(int loop = 15; loop>=0; loop--){
+        printf("%d",Bin_instruction[loop]);
+    }
+    outputToFile(Bin_instruction);
+    printf("\n");
+    return 1;
+}
+
+int checkRET(char* lLabel, char* lOpcode, char* lArg1, char* lArg2, char* lArg3, char* lArg4){
+    int Bin_instruction[16];
+
+    if(strcmp(lArg1,"") != 0 || strcmp(lArg2,"") != 0 || strcmp(lArg3,"") != 0 || strcmp(lArg4,"") != 0) exit(4);
+
+    Bin_instruction[15] = 1;
+    Bin_instruction[14] = 1;
+    Bin_instruction[13] = 0;
+    Bin_instruction[12] = 0;
+    Bin_instruction[11] = 0;
+    Bin_instruction[10] = 0;
+    Bin_instruction[9] = 0;
+    Bin_instruction[8] = 1;
+    Bin_instruction[7] = 1;
+    Bin_instruction[6] = 1;
+    Bin_instruction[5] = 0;
+    Bin_instruction[4] = 0;
+    Bin_instruction[3] = 0;
+    Bin_instruction[2] = 0;
+    Bin_instruction[1] = 0;
+    Bin_instruction[0] = 0;
+
+    for(int loop = 15; loop>=0; loop--){
+        printf("%d",Bin_instruction[loop]);
+    }
+    outputToFile(Bin_instruction);
+    printf("\n");
+    return 1;
+}
+
+int checkSHF(char* lLabel, char* lOpcode, char* lArg1, char* lArg2, char* lArg3, char* lArg4){
+    int DR[] = {0,0,0};
+    int SR[] = {0,0,0};
+    int Amount[4] ={0,0,0,0};
+    int Indetifiers[2] = {0,0};
+    //int Opcode[4] = {1,1,0,1};
+    int Bin_instruction[16];
+
+    validateReg(lArg1,DR);
+    validateReg(lArg2,SR);
+    validateAmmount(lArg3,Amount);
+    if(strcmp(lArg4,"") != 0) exit(4);
+
+    if (strcmp(lOpcode,"lshf") == 0) {
+        Indetifiers[1] = 0;
+        Indetifiers[0] = 0;
+    }
+    else if (strcmp(lOpcode,"rshfl") == 0) {
+        Indetifiers[1] = 0;
+        Indetifiers[0] = 1;
+    }
+    else if (strcmp(lOpcode,"rshfa") == 0) {
+        Indetifiers[1] = 1;
+        Indetifiers[0] = 1;
+    }
+
+    Bin_instruction[15] = 1;
+    Bin_instruction[14] = 1;
+    Bin_instruction[13] = 0;
+    Bin_instruction[12] = 1;
+    Bin_instruction[11] = DR[2];
+    Bin_instruction[10] = DR[1];
+    Bin_instruction[9] = DR[0];
+    Bin_instruction[8] = SR[2];
+    Bin_instruction[7] = SR[1];
+    Bin_instruction[6] = SR[0];
+    Bin_instruction[5] = Indetifiers[1];
+    Bin_instruction[4] = Indetifiers[0];
+    Bin_instruction[3] = Amount[3];
+    Bin_instruction[2] = Amount[2];
+    Bin_instruction[1] = Amount[1];
+    Bin_instruction[0] = Amount[0];
+
+    outputToFile(Bin_instruction);
+    printf("\n");
+    return 1;
+}
+
+int checkTRAP(char* lLabel, char* lOpcode, char* lArg1, char* lArg2, char* lArg3, char* lArg4){
+    int Opcode[4] = {1,1,1,1};
+    int Zeroes[4] = {0,0,0,0};
+    int Trap[8] = {0,0,0,0,0,0,0,0};
+    int Bin_instruction[16];
+
+    validateTrap(lArg1,Trap);
+    if(strcmp(lArg2,"") != 0 || strcmp(lArg3,"") != 0 || strcmp(lArg4,"") != 0) exit(4);
+
+    Bin_instruction[15] = Opcode[3];
+    Bin_instruction[14] = Opcode[2];
+    Bin_instruction[13] = Opcode[1];
+    Bin_instruction[12] = Opcode[0];
+    Bin_instruction[11] = Zeroes[3];
+    Bin_instruction[10] = Zeroes[2];
+    Bin_instruction[9] = Zeroes[1];
+    Bin_instruction[8] = Zeroes[0];
+    Bin_instruction[7] = Trap[7];
+    Bin_instruction[6] = Trap[6];
+    Bin_instruction[5] = Trap[5];
+    Bin_instruction[4] = Trap[4];
+    Bin_instruction[3] = Trap[3];
+    Bin_instruction[2] = Trap[2];
+    Bin_instruction[1] = Trap[1];
+    Bin_instruction[0] = Trap[0];
+    outputToFile(Bin_instruction);
+    return 1;
+}
+
+int checkXOR(char* lLabel, char* lOpcode, char* lArg1, char* lArg2, char* lArg3, char* lArg4){
+    int Opcode[4] = {1,0,0,1};
+    int DR[3] = {0,0,0};
+    int SR[3] = {0,0,0};
+    int XORReg[3] = {0,0,0};
+    int XORImmd[5] = {0,0,0,0,0};
+    int Bin_instruction[16] = {0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,1};
+
+    validateReg(lArg1,DR);
+    validateReg(lArg2,SR);
+    if(strcmp(lArg4,"") != 0) exit(4);
+    
+    Bin_instruction[11] = DR[2];
+    Bin_instruction[10] = DR[1];
+    Bin_instruction[9] = DR[0];
+    Bin_instruction[8] = SR[2];
+    Bin_instruction[7] = SR[1];
+    Bin_instruction[6] = SR[0];
+
+    if(isReg(lArg3)){
+        validateReg(lArg3,XORReg);
+
+        Bin_instruction[5] = 0;
+        Bin_instruction[4] = 0;
+        Bin_instruction[3] = 0;
+        Bin_instruction[2] = XORReg[2];
+        Bin_instruction[1] = XORReg[1];
+        Bin_instruction[0] = XORReg[0];
+    }
+    else {
+        validateImmediate(lArg3,XORImmd);
+
+        Bin_instruction[5] = 1;
+        Bin_instruction[4] = XORImmd[4];
+        Bin_instruction[3] = XORImmd[3];
+        Bin_instruction[2] = XORImmd[2];
+        Bin_instruction[1] = XORImmd[1];
+        Bin_instruction[0] = XORImmd[0];
+    }
+    outputToFile(Bin_instruction);
+    printf("\n");
+    return 1;
+}
+
+int checkFill(char* lLabel, char* lOpcode, char* lArg1, char* lArg2, char* lArg3, char* lArg4){
+  int fillWith;
+  fillWith = toNum(lArg1);
+  if(fillWith < -32768 || fillWith > 65536){
+    exit(3);
+  }
+  fillWith = 0x0000FFFF & fillWith;
+  fprintf( outfile, "0x%.4X\n", fillWith); 
+  printf("0x%.4X\n",fillWith); 
+
+  return 1;
+}
+/////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+
+
+/*First pass
+  -creates symbol table and gets initial address
+
+*/
+int func1(char* in, char* out){
+           printf("Starting 1st pass\n");
+
+           char lLine[MAX_LINE_LENGTH + 1], *lLabel, *lOpcode, *lArg1, *lArg2, *lArg3, *lArg4;
+           int lRet;
+           int haveOrig = 0; //To make sure program only has 1 .orig
+
+
+           /* open the input file */
+           infile = fopen( in, "r" );
+           outfile = fopen(out, "w"); 
+
+           //Loop through each line
+           do{
+              lRet = readAndParse( infile, lLine, &lLabel, &lOpcode, &lArg1, &lArg2, &lArg3, &lArg4);
+
+               if( lRet != DONE && lRet != EMPTY_LINE )
+              {
+                    if(strcmp(lLabel, "")){
+                      printf("Label: %s\n", lLabel);
+                      //TO DO check label is valid
+                      int addsressOfLabel = startAddress + (numlines * 2);
+                      labelIsValid(lLabel, lOpcode);
+                      strcpy(symbolTable[numLabels], lLabel);
+                      //Add label addres to list
+                      symbolTableAdds[numLabels] = addsressOfLabel;
+                      //printf("Found label: %s\n",lLabel);
+                      numLabels++;
+                    }
+
+                    if(!strcmp(lOpcode,".orig")){
+                      //Check it is first orig
+                      if(haveOrig){
+                        exit(4); //Error: Program has multiple .ORIG
+                      }
+                      haveOrig++;
+                      startAddress = toNum(lArg1);
+                      //Check orig is aligned
+                      if(startAddress % 2 == 1){
+                        exit(3); //Error: Starting addres not aligned
+                      }
+                      //Set orig
+                      fprintf(outfile, "0x%.4X\n", startAddress); 
+                      numlines--;
+                    }
+                    if(strcmp(lOpcode,".end") == 0){
+                      lRet = DONE;
+                      numlines--;
+                    }
+                    numlines++;
+              }
+           } while( lRet != DONE );
+    int finaladds = ((numlines*2) + startAddress - 2);
+    printf("Final is at %.4X\n",finaladds);
+    if(((numlines*2) + startAddress - 2) > 0xFFFF){
+      exit(4);
+    }
+
+    fclose(infile);
+    return 1;
+}
+
+int func2(char* in, char* out){
+           printf("\nStarting 2nd pass\n");
+           printf("0x%.4X\n",startAddress);
+           char lLine[MAX_LINE_LENGTH + 1], *lLabel, *lOpcode, *lArg1, *lArg2, *lArg3, *lArg4;
+           PC = startAddress;
+           int lRet;
+
+           infile = fopen( in, "r" );        /* open the input file */
+
+           int lineNum = 1;
+           //printf("LABEL   OPCODE  ARG1  ARG2  ARG3  ARG4\n");
+           do
+           {
+              lRet = readAndParse( infile, lLine, &lLabel, &lOpcode, &lArg1, &lArg2, &lArg3, &lArg4);
+
+               if( lRet != DONE && lRet != EMPTY_LINE )
+              {
+                    if(strcmp(lOpcode, ".orig")){
+                      PC = PC + 2;
+                    }
+                    //if(isOpcode(lOpcode) == -1) exit(2);
+
+                    if(strcmp(lOpcode,"add") == 0) checkAdd_And(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                     
+                    else if(strcmp(lOpcode,"and") == 0) checkAdd_And(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                      
+                    else if(strcmp(lOpcode,"br") == 0) checkBr(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"brn") == 0) checkBr(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"brp") == 0) checkBr(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"brnp") == 0) checkBr(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"brz") == 0)  checkBr(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"brnz") == 0) checkBr(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"brzp") == 0) checkBr(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"brnzp") == 0) checkBr(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    
+                     
+                    else if(strcmp(lOpcode,"halt") == 0) checkHalt(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                     
+                    else if(strcmp(lOpcode,"jsr") == 0) checkJsr(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+
+                    else if(strcmp(lOpcode,"jmp") == 0) checkJmpandJsrr(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"jsrr") == 0) checkJmpandJsrr(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+
+
+                      ////////
+                    else if(strcmp(lOpcode,"stb") == 0) checkLS(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"stw") == 0) checkLS(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"ldb") == 0) checkLS(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"ldw") == 0) checkLS(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"lea") == 0) checkLS(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+
+                    else if(strcmp(lOpcode,"not") == 0) checkNOT(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"ret") == 0) checkRET(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                     
+                    else if(strcmp(lOpcode,"lshf") == 0) checkSHF(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"rshfl") == 0) checkSHF(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"rshfa") == 0) checkSHF(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                     
+                    else if(strcmp(lOpcode,"nop") == 0) checkNOPandRTI(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,"rti") == 0) checkNOPandRTI(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+
+                    else if(strcmp(lOpcode,"trap") == 0) checkTRAP(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                     
+                    else if(strcmp(lOpcode,"xor") == 0) checkXOR(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,".fill") == 0) checkFill(lLabel, lOpcode, lArg1, lArg2, lArg3, lArg4);
+                    else if(strcmp(lOpcode,".end") == 0){
+                      lRet = DONE;
+                      lineNum--;
+                    }
+
+              }
+                lineNum++;
+           } while( lRet != DONE );
+    return 1;
+}
+
+int main(int argc, char* argv[]) {
+    //Parse command line arguments
+    char *prgName   = argv[0];
+    char *iFileName = argv[1];
+    char *oFileName = argv[2];
+
+    //openFiles(iFileName,oFileName);
+
+    func1(iFileName,oFileName);
+    //closeFiles();
+    func2(iFileName,oFileName);
+
+    closeFiles();
+
+    printf("Number of lines, %d\n",numlines);
+    
+    printf("Done!!!\n");
+
+    exit(0);
+
+    return 0;
+}

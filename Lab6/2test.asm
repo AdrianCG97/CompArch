@@ -1,0 +1,21 @@
+.orig x3000
+	LEA R0,a
+	LDW R1,R0,#0
+	ADD R2,R2,#-1
+	AND R3,R2,R1
+	XOR R4,R2,R1
+	Jsr B
+	AND R0,R0,#0
+	AND R1,R1,#0
+	AND R2,R2,#0
+
+B	AND R5,R5,#0
+	BRnp C
+	ADD R5,R5,#2
+	HALT
+
+C	ADD R5,R5,#4
+	HALT	
+
+a	.FILL x0F0F
+.end

@@ -1,0 +1,14 @@
+;Tests AND ADD BR
+
+.ORIG x3000
+	AND R0,R0,#0
+	AND R1,R1,R0
+B	ADD R0,R0,#10
+	ADD R1,R1,R0
+	BRp A
+	AND R0,R0,#0
+A	ADD R0,R0,#-11
+	BRn B
+	HALT
+.END	
+
